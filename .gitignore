@@ -1,13 +1,9 @@
-# python
 __pycache__/
 *.pyc
 .venv/
 .venv*/
-# data / artifacts
 data/
 artifacts/
 export_model/
-# notebooks checkpoints
 .ipynb_checkpoints/
-# OS
 .DS_Store
