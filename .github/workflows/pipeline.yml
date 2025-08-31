@@ -20,7 +20,7 @@ concurrency:
 env:
   PYTHON_VERSION: "3.10"
   HF_TOKEN:     ${{ secrets.HF_TOKEN }}
-  # Prefer Variables; if missing, fall back to Secrets of same name
+  # Prefer Variables; if missing, fall back to Secrets with same name
   DATASET_REPO: ${{ vars.DATASET_REPO != '' && vars.DATASET_REPO || secrets.DATASET_REPO }}
   MODEL_REPO:   ${{ vars.MODEL_REPO   != '' && vars.MODEL_REPO   || secrets.MODEL_REPO }}
   SPACE_ID:     ${{ vars.SPACE_ID }}
@@ -71,21 +71,26 @@ jobs:
         run: |
           python - <<'PY'
           import os, sys
-          from huggingface_hub import HfApi, RepositoryNotFoundError
+          from huggingface_hub import HfApi
+          from huggingface_hub.utils import HfHubHTTPError
+
           tok  = os.environ["HF_TOKEN"].strip()
           repo = os.environ["DATASET_REPO"].strip()
           api  = HfApi(token=tok)
           print("Checking dataset repo:", repo)
           try:
-            files = api.list_repo_files(repo_id=repo, repo_type="dataset")
-          except RepositoryNotFoundError:
-            print(f"ERROR: Dataset repo not found: {repo}")
-            sys.exit(1)
+              files = api.list_repo_files(repo_id=repo, repo_type="dataset")
+          except HfHubHTTPError as e:
+              code = getattr(getattr(e, "response", None), "status_code", None)
+              if code == 404:
+                  print(f"ERROR: Dataset repo not found or no access: {repo}")
+                  sys.exit(1)
+              raise
           need = {"data/train.csv", "data/test.csv"}
           missing = need.difference(files)
           if missing:
-            print("ERROR: Missing files in dataset:", ", ".join(sorted(missing)))
-            sys.exit(1)
+              print("ERROR: Missing files in dataset:", ", ".join(sorted(missing)))
+              sys.exit(1)
           print("Dataset OK. File count:", len(files))
           PY
 
@@ -153,7 +158,7 @@ jobs:
               "roc_auc":  float(roc_auc_score(yte, proba)),
               "pr_auc":   float(average_precision_score(yte, proba)),
               "f1":       float(f1_score(yte, pred)),
-              "precision":float(precision_score[yte == 1], default=0.0) if hasattr(__import__('numpy'), 'array') else float('nan'),
+              "precision":float(precision_score(yte, pred)),
               "recall":   float(recall_score(yte, pred)),
               "brier":    float(brier_score_loss(yte, proba)),
           }
