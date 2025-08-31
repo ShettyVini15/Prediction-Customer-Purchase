@@ -7,7 +7,7 @@ on:
     branches: [ "main" ]
   workflow_dispatch: {}
   schedule:
-    - cron: "0 3 * * 1"   # Mondays 03:00 UTC
+    - cron: "0 3 * * 1"
 
 permissions:
   contents: write
@@ -19,11 +19,12 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.10"
-  HF_TOKEN:     ${{ secrets.HF_TOKEN }}         # keep token as secret
-  HF_USERNAME:  ${{ vars.HF_USERNAME }}         # optional
-  DATASET_REPO: ${{ vars.DATASET_REPO }}        # e.g., VRS1503/tourism-customer-data
-  MODEL_REPO:   ${{ vars.MODEL_REPO }}          # e.g., VRS1503/tourism_customer_xgb
-  SPACE_ID:     ${{ vars.SPACE_ID }}            # optional, for Space redeploy
+  HF_TOKEN:     ${{ secrets.HF_TOKEN }}
+  # Prefer Variables; if missing, fall back to Secrets of same name
+  DATASET_REPO: ${{ vars.DATASET_REPO != '' && vars.DATASET_REPO || secrets.DATASET_REPO }}
+  MODEL_REPO:   ${{ vars.MODEL_REPO   != '' && vars.MODEL_REPO   || secrets.MODEL_REPO }}
+  SPACE_ID:     ${{ vars.SPACE_ID }}
+  HF_USERNAME:  ${{ vars.HF_USERNAME != '' && vars.HF_USERNAME || secrets.HF_USERNAME }}
 
 jobs:
   train-register-deploy:
@@ -56,11 +57,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Verify required secrets/vars
+      - name: Verify required inputs
         run: |
-          test -n "${{ secrets.HF_TOKEN }}"     || (echo "HF_TOKEN missing" && exit 1)
-          test -n "${{ env.DATASET_REPO }}"     || (echo "DATASET_REPO missing (set as Actions Variable)" && exit 1)
-          test -n "${{ env.MODEL_REPO }}"       || (echo "MODEL_REPO missing (set as Actions Variable)" && exit 1)
+          test -n "${{ secrets.HF_TOKEN }}"   || (echo "HF_TOKEN missing" && exit 1)
+          test -n "${{ env.DATASET_REPO }}"   || (echo "DATASET_REPO missing (set as Variable or Secret)" && exit 1)
+          test -n "${{ env.MODEL_REPO }}"     || (echo "MODEL_REPO missing (set as Variable or Secret)" && exit 1)
           echo "All required inputs present."
 
       - name: Sanity check HF auth & dataset access
@@ -152,7 +153,7 @@ jobs:
               "roc_auc":  float(roc_auc_score(yte, proba)),
               "pr_auc":   float(average_precision_score(yte, proba)),
               "f1":       float(f1_score(yte, pred)),
-              "precision":float(precision_score(yte, pred)),
+              "precision":float(precision_score[yte == 1], default=0.0) if hasattr(__import__('numpy'), 'array') else float('nan'),
               "recall":   float(recall_score(yte, pred)),
               "brier":    float(brier_score_loss(yte, proba)),
           }
@@ -190,8 +191,8 @@ jobs:
           SPACE_ID: ${{ env.SPACE_ID }}
         run: |
           python - <<'PY'
-          import os
           from huggingface_hub import HfApi
+          import os
           api = HfApi(token=os.environ["HF_TOKEN"])
           api.upload_folder(
               folder_path="tourism_project/deployment",
