@@ -19,11 +19,11 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.10"
-  HF_USERNAME:  ${{ secrets.HF_USERNAME }}
-  HF_TOKEN:     ${{ secrets.HF_TOKEN }}
-  DATASET_REPO: ${{ secrets.DATASET_REPO }}
-  MODEL_REPO:   ${{ secrets.MODEL_REPO }}
-  SPACE_ID:     ${{ secrets.SPACE_ID }}
+  HF_TOKEN:     ${{ secrets.HF_TOKEN }}         # keep token as secret
+  HF_USERNAME:  ${{ vars.HF_USERNAME }}         # optional
+  DATASET_REPO: ${{ vars.DATASET_REPO }}        # e.g., VRS1503/tourism-customer-data
+  MODEL_REPO:   ${{ vars.MODEL_REPO }}          # e.g., VRS1503/tourism_customer_xgb
+  SPACE_ID:     ${{ vars.SPACE_ID }}            # optional, for Space redeploy
 
 jobs:
   train-register-deploy:
@@ -36,6 +36,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Debug repo ids
+        run: |
+          echo "DATASET_REPO=${{ env.DATASET_REPO }}"
+          echo "MODEL_REPO=${{ env.MODEL_REPO }}"
+          echo "SPACE_ID=${{ env.SPACE_ID }}"
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -50,40 +56,44 @@ jobs:
           python -m pip install --upgrade pip
           pip install --no-cache-dir -r requirements.txt
 
-      - name: Verify required secrets
+      - name: Verify required secrets/vars
         run: |
-          test -n "${{ secrets.HF_USERNAME }}"  || (echo "HF_USERNAME missing" && exit 1)
           test -n "${{ secrets.HF_TOKEN }}"     || (echo "HF_TOKEN missing" && exit 1)
-          test -n "${{ secrets.DATASET_REPO }}" || (echo "DATASET_REPO missing" && exit 1)
-          test -n "${{ secrets.MODEL_REPO }}"   || (echo "MODEL_REPO missing" && exit 1)
-          echo "All required secrets present."
+          test -n "${{ env.DATASET_REPO }}"     || (echo "DATASET_REPO missing (set as Actions Variable)" && exit 1)
+          test -n "${{ env.MODEL_REPO }}"       || (echo "MODEL_REPO missing (set as Actions Variable)" && exit 1)
+          echo "All required inputs present."
 
       - name: Sanity check HF auth & dataset access
         env:
           HF_TOKEN:     ${{ secrets.HF_TOKEN }}
-          HF_USERNAME:  ${{ secrets.HF_USERNAME }}
-          DATASET_REPO: ${{ secrets.DATASET_REPO }}
+          DATASET_REPO: ${{ env.DATASET_REPO }}
         run: |
           python - <<'PY'
-          import os
-          from huggingface_hub import HfApi
-          tok = os.environ["HF_TOKEN"].strip()
-          assert tok.startswith("hf_"), "HF_TOKEN must start with 'hf_'"
-          api = HfApi(token=tok)
-          me = api.whoami()
-          print("Auth OK as:", me.get("name") or me.get("username"))
-          repo = os.environ["DATASET_REPO"]
-          files = list(api.list_repo_files(repo_id=repo, repo_type="dataset"))
-          print("Dataset reachable:", repo, "file count:", len(files))
+          import os, sys
+          from huggingface_hub import HfApi, RepositoryNotFoundError
+          tok  = os.environ["HF_TOKEN"].strip()
+          repo = os.environ["DATASET_REPO"].strip()
+          api  = HfApi(token=tok)
+          print("Checking dataset repo:", repo)
+          try:
+            files = api.list_repo_files(repo_id=repo, repo_type="dataset")
+          except RepositoryNotFoundError:
+            print(f"ERROR: Dataset repo not found: {repo}")
+            sys.exit(1)
+          need = {"data/train.csv", "data/test.csv"}
+          missing = need.difference(files)
+          if missing:
+            print("ERROR: Missing files in dataset:", ", ".join(sorted(missing)))
+            sys.exit(1)
+          print("Dataset OK. File count:", len(files))
           PY
 
       - name: Train, Evaluate, Register model on HF Hub
         env:
           HF_TOKEN:              ${{ secrets.HF_TOKEN }}
           HUGGINGFACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_USERNAME:           ${{ secrets.HF_USERNAME }}
-          DATASET_REPO:          ${{ secrets.DATASET_REPO }}
-          MODEL_REPO:            ${{ secrets.MODEL_REPO }}
+          DATASET_REPO:          ${{ env.DATASET_REPO }}
+          MODEL_REPO:            ${{ env.MODEL_REPO }}
         run: |
           python - <<'PY'
           import os, json, datetime, pathlib, joblib
@@ -177,7 +187,7 @@ jobs:
         if: ${{ env.SPACE_ID != '' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          SPACE_ID: ${{ secrets.SPACE_ID }}
+          SPACE_ID: ${{ env.SPACE_ID }}
         run: |
           python - <<'PY'
           import os
